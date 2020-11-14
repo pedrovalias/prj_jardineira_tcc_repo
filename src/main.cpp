@@ -1,4 +1,4 @@
-//#include <Arduino.h>
+#include <Arduino.h>
 
 /* ******************** Rega Automática Pedrorv ********************
    Criado por: Pedro Henrique Ravanelli Valias
@@ -105,6 +105,8 @@ void realiza_rega(int tipoRega);
 void regar();
 void obterDadosDHT();
 void iniciarWifi();
+void info_serial();
+void executa_loop();
 
 //Define FirebaseESP8266 data object
 FirebaseData firebaseData;
@@ -114,7 +116,7 @@ FirebaseJson json;
 // String myString;
 
 // Declara uma variavel para o caminho raiz dos dados no banco de dados
-String path = "/Dados";
+String jd_x = "/JD_0001";
 
 void setup() {
 
@@ -125,36 +127,27 @@ void setup() {
 
   limiarSeco = 75;        // Porcentagem determinada para umidade do solo aceitavel 
   tempoRega = 9;          // Tempo de acao da rega em segundos
-  tempoLoop = 12;         // Tempo em horas de intervalo entre as acoes de rega
+  tempoLoop = 2;         // Tempo em horas de intervalo entre as acoes de rega
 
-  // Define o pino como saída e inicializa a valvula de agua como desligada
+  // Define o pino da valvula como saída e a inicializa desligada
   pinMode(pinoValvula, OUTPUT);
   digitalWrite(pinoValvula, HIGH);
 
-  // Define os LEDS informativos como saída e o detector de água como entrada - funciona como um botão
+  // Define os LEDS informativos como saida e o detector de agua como entrada - funciona como um botao
   pinMode(PINO_LED_R, OUTPUT); // LED vermelho
   pinMode(PINO_LED_G, OUTPUT); // LED verde
   pinMode(PINO_LED_B, OUTPUT); // LED azul
   pinMode(ledNivelAgua, OUTPUT); 
   pinMode(sensorNivelMaximo, INPUT);
 
-  Serial.println("#### PARÂMETROS DO SISTEMA ####");
-  Serial.print("Tempo loop:  "); 
-  Serial.println(tempoLoop,0);
-  Serial.print("Tempo rega: ");
-  Serial.println(tempoRega);
-  Serial.print("Limiar Seco: ");
-  Serial.println(limiarSeco);
-  Serial.println("-------------------------------");
-
+  info_serial();
+  
   delay(500);
 
   iniciarWifi();
 }
 
 void loop() {
-  // Lê o estado do pino destinado ao detector de agua
-  //  ######### detecAgua = digitalRead(sensorNivelMaximo);
   
   Serial.println("# SISTEMA INICIADO");
 
@@ -169,44 +162,7 @@ void loop() {
 
   escreveLCD(limpaLCD,0,0,"Rega Automatica ");
 
-  // Mede a umidade do solo a cada 3 segundos. Faz isso durante tempo estipulado (9 horas)
-  for(int i=0; i < tempoLoop; i++) { //tempoloop
-    escreveLCD(!limpaLCD,0,1,"Umidade: "); 
-    
-    // Faz a leitura do sensor de umidade do solo
-    umidadeSolo = analogRead(pinoSensorUmidade);
-    
-    // Converte a variação do sensor de 0 a 1023 para 0 a 100
-    umidadeSolo = map(umidadeSolo, 1023, 0, 0, 100);
-
-    // Envia leitura de umidade ao Firebase em tempo real
-    Firebase.setInt(firebaseData, path + "/umidade_solo",umidadeSolo);
-
-    // Exibe a mensagem no Display LCD:
-    lcd.print(umidadeSolo);
-    lcd.print(" %    ");
-
-    obterDadosDHT();
-
-    // Exibe tempo espera no console para acompanhamento
-    Serial.print(i);
-    Serial.print(". ");
-
-    if(Firebase.getBool(firebaseData, "/Acionamentos/Rega")){
-      if(firebaseData.boolData() == true) {
-        Serial.println("# Rega acionada manualmente #");
-        Serial.println(firebaseData.boolData());
-        regar();
-        Firebase.setBool(firebaseData, "/Acionamentos/Rega",false);
-      }
-    }
-    else {
-      Serial.println(firebaseData.errorReason());
-    }
-
-    // Espera 3 segundos
-    delay(3000);
-  }
+  executa_loop();
 
   realiza_rega(2);
   
@@ -231,6 +187,61 @@ void escreveLCD(bool limpa, int coluna, int linha, String texto) {
   lcd.print(texto);
 }
 
+void info_serial() {
+  Serial.println("");
+  Serial.println("#### PARÂMETROS DO SISTEMA ####");
+  Serial.print("Tempo loop:  "); 
+  Serial.println(tempoLoop);
+  Serial.print("Tempo rega: ");
+  Serial.println(tempoRega);
+  Serial.print("Limiar Seco: ");
+  Serial.println(limiarSeco);
+  Serial.println("-------------------------------");
+}
+
+void executa_loop() {
+   
+// Mede a umidade do solo a cada 3 segundos. Faz isso durante tempo estipulado (9 horas)
+  for(int i=0; i < tempoLoop ; i++) { // Hora = 3600s/delay(5s) = 720s
+
+    escreveLCD(!limpaLCD,0,1,"Umidade: "); 
+    
+    // Faz a leitura do sensor de umidade do solo
+    umidadeSolo = analogRead(pinoSensorUmidade);
+    
+    // Converte a variação do sensor de 0 a 1023 para 0 a 100
+    umidadeSolo = map(umidadeSolo, 1023, 0, 0, 100);
+
+    // Envia leitura de umidade ao Firebase em tempo real
+    Firebase.setDouble(firebaseData, jd_x + "/Sensores/umidade_solo",umidadeSolo);
+
+    // Exibe a mensagem no Display LCD:
+    lcd.print(umidadeSolo);
+    lcd.print(" %    ");
+
+    obterDadosDHT();
+
+    // Exibe tempo espera no console para acompanhamento
+    Serial.print(i);
+    Serial.print(". ");
+
+    if(Firebase.getBool(firebaseData, jd_x + "/Acionamentos/Rega")){
+      if(firebaseData.boolData() == true) {
+        Serial.println("# Rega acionada manualmente #");
+        Serial.println(firebaseData.boolData());
+        regar();
+        Firebase.setBool(firebaseData, jd_x + "/Acionamentos/Rega",false);
+      }
+    }
+    else {
+      Serial.println(firebaseData.errorReason());
+    }
+
+    // Espera 5 segundos
+    delay(5000);
+  }
+}
+
 void realiza_rega(int tipoRega){
   
   if(tipoRega == 0){
@@ -246,7 +257,6 @@ void realiza_rega(int tipoRega){
     } else {
       // Desliga a valvula de agua (logica invertida - depende de como estiver ligado o modulo rele)
       digitalWrite(pinoValvula, HIGH);
-      Firebase.setBool(firebaseData, path + "/valvula_status",digitalRead(pinoValvula));
       escreveLCD(!limpaLCD,0,1,"Solo Encharcado ");
       Serial.println("Solo encharcado");
       ativarLed("vermelho");
@@ -277,7 +287,7 @@ void regar(){
       
       // Liga a valvula de agua
       digitalWrite(pinoValvula, LOW);
-      Firebase.setBool(firebaseData, path + "/valvula_status",digitalRead(pinoValvula));
+      Firebase.setBool(firebaseData, jd_x + "/Sensores/pino_valvula",digitalRead(pinoValvula));
 
       Serial.print("Regando | estado válvula: ");
       Serial.println(pinoValvula);
@@ -324,7 +334,7 @@ void regar(){
     }
     // Desliga a valvula de agua e ativa LED informativo de conclusão de rega
     digitalWrite(pinoValvula, HIGH);
-    Firebase.setBool(firebaseData, path + "/valvula_status",digitalRead(pinoValvula));
+    Firebase.setBool(firebaseData, jd_x + "/Sensores/valvula_status",digitalRead(pinoValvula));
     escreveLCD(limpaLCD,0,1,"REGA FINALIZADA!");
     Serial.println("Processo de rega finalizado");
     ativarLed("verde");
@@ -335,7 +345,7 @@ void regar(){
 // Funcao que verifica se o nivel de agua esta no maximo ou nao 
 int verificaNivel(){
   nivelMaximo = digitalRead(sensorNivelMaximo);
-  Firebase.setInt(firebaseData, path + "/nivel_maximo",nivelMaximo);
+  Firebase.setInt(firebaseData, jd_x + "/Sensores/nivel_maximo",nivelMaximo);
 
   // Se detectado contato com a agua 
   if(nivelMaximo == HIGH){
@@ -344,11 +354,10 @@ int verificaNivel(){
     
     // Desliga a valvula de agua, caso esteja ligada
     digitalWrite(pinoValvula, HIGH);
-    Firebase.setBool(firebaseData, path + "/valvula_status",digitalRead(pinoValvula));
+    Firebase.setBool(firebaseData, jd_x + "/Sensores/valvula_status",digitalRead(pinoValvula));
 
     // Liga LEDS informativos tanto da caixa quanto do vaso da jardineira
     digitalWrite(ledNivelAgua, HIGH);
-    Firebase.setBool(firebaseData, path + "/valvula_status",digitalRead(ledNivelAgua));
     ativarLed("vermelho");
     delay(3000);
   } else {
@@ -356,7 +365,6 @@ int verificaNivel(){
 
     // Desliga LED informativo da caixa
     digitalWrite(ledNivelAgua, LOW);
-    Firebase.setBool(firebaseData, path + "/valvula_status",digitalRead(ledNivelAgua));
   }
   Serial.print("Estado sensor nível: ");
   Serial.println(nivelMaximo);
@@ -444,10 +452,10 @@ void desligarLed(){
 void obterDadosDHT(){
   float h=dht.readHumidity(); 
   float t=dht.readTemperature(); 
-  Serial.println("Temperatura: "); Serial.print(t);
-  Serial.println("| Umidade do Ar: "); Serial.print(h); 
-  Firebase.setFloat(firebaseData, "/Dados Ambiente/temperatura",t);
-  Firebase.setFloat(firebaseData, "/Dados Ambiente/umidade_relativa",h);
+  // Serial.println("Temperatura: "); Serial.print(t);
+  // Serial.println("| Umidade do Ar: "); Serial.print(h); 
+  Firebase.setFloat(firebaseData, jd_x + "/Dados Ambiente/temperatura",t);
+  Firebase.setFloat(firebaseData, jd_x + "/Dados Ambiente/umidade_relativa",h);
 }
 
 void iniciarWifi(){
@@ -478,17 +486,6 @@ void iniciarWifi(){
   //Size and its write timeout e.g. tiny (1s), small (10s), medium (30s) and large (60s).
   Firebase.setwriteSizeLimit(firebaseData, "tiny");
 }
-
-
-
-
-
-
-
-
-
-
-
 
 
 
