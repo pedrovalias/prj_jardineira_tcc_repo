@@ -1,6 +1,6 @@
 #include <Arduino.h>
 
-/* ******************** Rega Automática Pedrorv ********************
+/* ************************* Rega Automatica Pedrorv *************************
    Criado por: Pedro Henrique Ravanelli Valias
    Rev.: 01
    Data: 15.06.2020
@@ -8,21 +8,17 @@
    Guia de conexão:
    LCD RS: pino 12
    LCD Enable: pino 11
-   LCD D4: pino 5
-   LCD D5: pino 4
-   LCD D6: pino 3
-   LCD D7: pino 2
-   LCD R/W: GND
    LCD VSS: GND
    LCD VCC: VCC (5V)
-   Potenciômetro de 10K terminal 1: GND
-   Potenciômetro de 10K terminal 2: V0 do LCD (Contraste)
-   Potenciômetro de 10K terminal 3: VCC (5V)
-   Sensor de umidade do solo A0: Pino A0
-   Módulo Relé (Válvula): Pino 10
-   Sensor indicador de ninvel de agua: Pino A5
-   Sensor indicador de nivel máximo de água: Pino 7
-   LED indicador de nível máximo de água: Pino 13
+
+   Sensor de umidade do solo: Pino A0
+   Módulo Relé: Pino ??
+   Válvula Solenóide: Pino ??
+   Sensor Temperatura DHT11: Pino ??
+   Sensor indicador de nivel máximo de água: Pino ??
+   LED RGB indicador de ações da jardineira: Pino ?? 
+   LED indicador de nível máximo de água: Pino ??
+
 
    Este código utiliza a biblioteca LiquidCrystal
 
@@ -31,7 +27,7 @@
    library modified 5 Jul 2009
    by Limor Fried (http://www.ladyada.net)
 
-  //PLACA nodeMCU
+  Guia pinagem útil NodeMCU
   #define D0 16
   #define D1 5 SCL
   #define D2 4 SDA
@@ -43,7 +39,7 @@
   #define D8 15
   
    
- ***************************************************************************** */
+ ****************************************************************************** */
 
 // Inclui a biblioteca do LCD:
 #include <Wire.h>
@@ -73,6 +69,9 @@ LiquidCrystal_I2C lcd(0x27,16,2); // Endereco, colunas, linhas
 #define DHTPIN 0 // Pino D3
 #define DHTTYPE DHT11 
 DHT dht(DHTPIN,DHTTYPE);
+int contadorAltaTemperatura = 0;
+int contadorBaixaTemperatura = 0;
+boolean autoAjusteLoop = true;
 
 // Define os pinos dos sensores dos sistema
 const int sensorNivelMaximo = 16;           // PINO D0
@@ -89,6 +88,9 @@ const int PINO_LED_B = 13;      // Azul       PINO D7
 int limiarSeco = 0;             // Porcentagem determinada para umidade do solo aceitavel 
 int tempoRega = 0;              // Tempo de acao da rega em segundos
 int tempoLoop = 0;              // Tempo que vai levar a cada acao de regagem em horas
+int tempoLoopControle = 0;
+const int delayLoop = 5;
+const int quatroHoras = 4;//2880;   // 4*3600/delayLoop = 2880 = 4h
 
 // Inicializa todos os sensores zerados
 int nivelMaximo = 0;            // inicializador deteccao liquido
@@ -106,13 +108,14 @@ int verificaNivel();
 void ativarLed(char corLed[10]);
 void realiza_rega(int tipoRega);
 void regar();
-void obterDadosDHT();
+int obterDadosDHT(int i);
 void iniciarWifi();
 void info_serial();
 void executa_loop();
 void envia_dados_firebase();
 int verifica_alteracao_parametros(int t);
 void iniciarArduinoOTA ();
+void gravarLog();
 
 //Define FirebaseESP8266 data object
 FirebaseData firebaseData;
@@ -128,6 +131,9 @@ int id = 0001;
 // Declara uma variavel para o caminho raiz dos dados no banco de dados
 String jd_x = "/Jardineira_x";
 
+//=======================================================================================================
+//                                            INICIO SETUP
+//=======================================================================================================
 void setup() {
 
   Serial.begin(115200);   // Inicializa o console serial 
@@ -157,8 +163,14 @@ void setup() {
   iniciarWifi();
 
   envia_dados_firebase();
+
+//============================================ FIM SETUP ================================================
 }
 
+
+//=======================================================================================================
+//                                            INICIO LOOP
+//=======================================================================================================
 void loop() {
   // Verifica se tem algo a ser atualizado no software
   ArduinoOTA.handle();
@@ -186,6 +198,8 @@ void loop() {
   Serial.println(contador);
   Serial.println("_______________________________");
   Serial.println(" ");
+
+//============================================ FIM LOOP ================================================
 }
 
 void envia_dados_firebase() {
@@ -193,11 +207,10 @@ void envia_dados_firebase() {
   Firebase.setInt(firebaseData, jd_x + "/Acionamentos/limiar_seco", limiarSeco);
   Firebase.setInt(firebaseData, jd_x + "/Acionamentos/tempo_rega", tempoRega);
   Firebase.setInt(firebaseData, jd_x + "/Acionamentos/tempo_loop", tempoLoop);
-  // Firebase.setInt(firebaseData, jd_x + "/Acionamentos/", );
-
+  Firebase.setBool(firebaseData, jd_x + "/Acionamentos/auto_ajuste_loop", autoAjusteLoop);
 }
 
-/* Funcao para escrecver no LCD
+/* Funcao para escrever no LCD
    * Limpa o LCD  
    * Posiciona o cursor do LCD na coluna 0 linha 1
    * (Obs: linha 1 é a segunda linha, a contagem começa em 0
@@ -224,16 +237,22 @@ void info_serial() {
 }
 
 void executa_loop() {
+
+  // Hora = 3600s/delay(5s) = 720s
+  tempoLoopControle = tempoLoop;//(tempoLoop*3600)/delayLoop;
+  Firebase.setInt(firebaseData, jd_x + "/Teste/tempoLoopControle",tempoLoopControle);
+
+  Serial.print("Tempo Loop controle: "); Serial.println(tempoLoopControle);
   
   int t = 0;
 
-  obterDadosDHT();
+  obterDadosDHT(t);
    
 // Mede a umidade do solo a cada 3 segundos. Faz isso durante tempo estipulado (9 horas)
-  for(int i=0; i < tempoLoop ; i++) { // Hora = 3600s/delay(5s) = 720s
+  for(int i=0; i < tempoLoopControle ; i++) { // Hora = 3600s/delay(5s) = 720s
     // Verifica se tem algo a ser atualizado no software
     ArduinoOTA.handle();
-    t = i;
+    // t = i;
 
     if(WiFi.status() != WL_CONNECTED) {
       Firebase.setBool(firebaseData, jd_x + "/Conexao/conexao_status", conexao_status);
@@ -241,8 +260,18 @@ void executa_loop() {
       iniciarWifi();
     }
 
-    obterDadosDHT();
+    i = obterDadosDHT(i);
+
+    Firebase.setInt(firebaseData, jd_x + "/Teste/i_for",i);
+
+    Firebase.setInt(firebaseData, jd_x + "/Teste/tempoLoopControle_Validacao", tempoLoopControle);
     
+    // Se for alterado o tempo de Loop, o loop atual será finalizado (i = tempoLoop)
+    i = verifica_alteracao_parametros(i);
+
+    Firebase.setInt(firebaseData, jd_x + "/Teste/i_for",i);
+
+    escreveLCD(limpaLCD,0,0,"Rega Automatica ");
     escreveLCD(!limpaLCD,0,1,"Umidade: "); 
     
     // Faz a leitura do sensor de umidade do solo
@@ -262,9 +291,6 @@ void executa_loop() {
     Serial.print(i);
     Serial.print(". ");
 
-    // Se for alterado o tempo de Loop, o loop atual será finalizado (i = tempoLoop)
-    i = verifica_alteracao_parametros(t);
-
     // Verifica se houve acionamento manual da rega
     if(Firebase.getBool(firebaseData, jd_x + "/Acionamentos/rega")){
       if(firebaseData.boolData() == true) {
@@ -280,10 +306,14 @@ void executa_loop() {
     }
 
     // Espera 5 segundos
-    delay(5000);
+    delay(delayLoop*1000);
+
+
+    // gravarLog();
   }
 }
 
+// Funcao para validar se houve alguma alteracao de parametros via aplicativo movel
 int verifica_alteracao_parametros(int t){
 
   if(Firebase.getInt(firebaseData, jd_x + "/Acionamentos/tempo_loop")){
@@ -291,7 +321,13 @@ int verifica_alteracao_parametros(int t){
       Serial.println("TempoLoopDb: "); Serial.println(firebaseData.intData());
       tempoLoop = firebaseData.intData();
       Serial.print("Tempo loop alterado: "); Serial.println(tempoLoop);
-      t = tempoLoop;
+      t = tempoLoopControle;
+      String txtTempoLoop = String(tempoLoop);
+      escreveLCD(limpaLCD, 0,0,"CONFIG. ALTERADA");
+      escreveLCD(!limpaLCD,0,1,"Tempo Loop: ");
+      escreveLCD(!limpaLCD,0,1,txtTempoLoop);
+      escreveLCD(!limpaLCD,0,1,"H ");
+      delay(3000);
     }
   }
   
@@ -300,6 +336,12 @@ int verifica_alteracao_parametros(int t){
       Serial.println("TempoRegaDB: "); Serial.println(firebaseData.intData());
       tempoRega = firebaseData.intData();
       Serial.print("Tempo Rega alterado: "); Serial.println(tempoRega);
+      String txtTempoRega = String(tempoRega);
+      escreveLCD(limpaLCD, 0,0,"CONFIG. ALTERADA");
+      escreveLCD(!limpaLCD,0,1,"Tempo Rega: ");
+      escreveLCD(!limpaLCD,0,1,txtTempoRega);
+      escreveLCD(!limpaLCD,0,1,"s ");
+      delay(3000);
     }
   }
   
@@ -308,6 +350,25 @@ int verifica_alteracao_parametros(int t){
       Serial.println("LimiarSecoDB: "); Serial.println(firebaseData.intData());
       limiarSeco = firebaseData.intData();
       Serial.print("Limiar Seco alterado: "); Serial.println(limiarSeco);
+      String txtLimiarSeco = String(limiarSeco);
+      escreveLCD(limpaLCD, 0,0,"CONFIG. ALTERADA");
+      escreveLCD(!limpaLCD,0,1,"Limiar Seco: ");
+      escreveLCD(!limpaLCD,0,1, txtLimiarSeco);
+      escreveLCD(!limpaLCD,0,1,"%");
+      delay(3000);
+    }
+  }
+
+  if (Firebase.getBool(firebaseData, jd_x + "/Acionamentos/auto_ajuste_loop")){
+    if(firebaseData.boolData() != autoAjusteLoop) {
+      Serial.println("AutoAjusteDB: "); Serial.println(firebaseData.boolData());
+      autoAjusteLoop = firebaseData.boolData();
+      Serial.print("Auto ajuste alterado: "); Serial.println(autoAjusteLoop);
+      String txtAutoAjuste = String(autoAjusteLoop);
+      escreveLCD(limpaLCD, 0,0,"CONFIG. ALTERADA");
+      escreveLCD(!limpaLCD,0,1,"Auto Ajuste:");
+      escreveLCD(!limpaLCD,0,1, txtAutoAjuste);
+      delay(3000);
     }
   }
   else{
@@ -316,6 +377,7 @@ int verifica_alteracao_parametros(int t){
   Firebase.setInt(firebaseData, jd_x + "/Acionamentos/tempo_loop",tempoLoop);
   Firebase.setInt(firebaseData, jd_x + "/Acionamentos/tempo_rega",tempoRega);
   Firebase.setInt(firebaseData, jd_x + "/Acionamentos/limiar_seco",limiarSeco);
+  Firebase.setBool(firebaseData, jd_x + "/Acionamentos/auto_ajuste_loop",autoAjusteLoop);
 
   return t;
 }
@@ -345,6 +407,9 @@ void realiza_rega(int tipoRega){
 
 // Inicializa acao de rega da jardineira   
 void regar(){
+  // Como esta regando, reinicializa o contator de leitura da temperatura
+  contadorAltaTemperatura = 0;
+  contadorBaixaTemperatura = 0;
 
   /* Se verificacao do sensor nivel maximo nao detectar contato com a agua
    * (sensor == LOW)
@@ -509,44 +574,62 @@ void desligarLed(){
   return;
 }
 
-// void recebeDadosFirebase(int dados){
-//   int dadoRecebido = dados;
+int obterDadosDHT(int i){
 
-//   if(Firebase.getInt(firebaseData, "/XXXXXXX/CAMINHO/XXXXXXX")){
-//     if(firebaseData.intData() == true) {
-//       Serial.println("XXXX TESTE XXXX");
-//       Serial.println(firebaseData.intData());
-//       // digitalWrite(LED,HIGH);
-//     }
-//     else if(firebaseData.boolData() == false) {
-//       Serial.println("ligth bool = ");
-//       Serial.println(firebaseData.boolData());
-//       // digitalWrite(LED,LOW);
-//     }
-//   }
-//   else {
-//     Serial.println(firebaseData.errorReason());
-//   }
-// }
-
-void obterDadosDHT(){
   float h=dht.readHumidity(); 
   float t=dht.readTemperature(); 
 
-  // Valida se existe algum erro de leitura dos valores do DHT
+  // Valida se existe algum erro de leitura dos valores do DHT 
+  // Se houver, seta a umidade e temperatura com valor zero
   if (isnan(h) || isnan(t)) { 
     h=0; t=0; 
   }
 
   // Serial.print("# Temperatura: "); Serial.print(t);
-  // Serial.print("| Umidade do Ar: "); Serial.println(h); 
+  // Serial.print("| Umidade do Ar: "); Serial.println(h);
+
+  /* 
+     Realiza duas verificacoes: 
+     Se auto ajuste estiver selecionado, sera alterado o comportamento de rega da jardineira
+     Para temperatura registrada acima de 30 graus por um periodo de 4h, tempo rega alterado para acontecer a cada 5h
+     Para temperatura abaixo de 28 pelo periodo de 4h, tempo rega alterado para a cada 9h
+  */
+  if(t > 30 && autoAjusteLoop) {
+    contadorAltaTemperatura++;
+    Firebase.setInt(firebaseData, jd_x + "/Teste/contadorAltaTemperatura",contadorAltaTemperatura);
+  
+    if(contadorAltaTemperatura >= quatroHoras && tempoLoop >= 7) {
+      i = tempoLoopControle;
+      tempoLoop = 5;
+      Firebase.setInt(firebaseData, jd_x + "/Teste/alterou_loop_automatico",tempoLoop);
+      Firebase.setInt(firebaseData, jd_x + "/Acionamentos/tempo_loop",tempoLoop);
+      Serial.println("Auto ajuste acionado. TempoLoop: "); Serial.println(tempoLoop);  
+    }
+  }
+  if(t < 28 && autoAjusteLoop) {
+    contadorBaixaTemperatura++;
+    Firebase.setInt(firebaseData, jd_x + "/Teste/contadorBaixaTemperatura",contadorBaixaTemperatura);
+  
+    if(contadorBaixaTemperatura >= quatroHoras && tempoLoop < 7) {
+      i = tempoLoopControle;
+      tempoLoop = 9;
+      Firebase.setInt(firebaseData, jd_x + "/Teste/alterou_loop_automatico",tempoLoop);
+      Firebase.setInt(firebaseData, jd_x + "/Acionamentos/tempo_loop",tempoLoop);
+      Serial.println("Auto ajuste acionado. TempoLoop: "); Serial.println(tempoLoop);  
+    }
+  }
   
   // Envia a temperatura e a umidade relativa do ar ao Firebase 
   Firebase.setInt(firebaseData, jd_x + "/Dados Ambiente/temperatura",t);
   Firebase.setInt(firebaseData, jd_x + "/Dados Ambiente/umidade_relativa",h);
+
+  Firebase.setInt(firebaseData, jd_x + "/Teste/i_obter",i);
+  
+  return i;
 }
 
 void iniciarWifi(){
+  // TODO : SETAR UM IP FIXO PARA O NODEMCU
   IPAddress ip;
 
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
@@ -602,7 +685,7 @@ void iniciarArduinoOTA () {
   ArduinoOTA.onEnd([]() {
     Serial.println("nFim!");
     escreveLCD(limpaLCD,0,0,"     UPLOAD    ");
-    escreveLCD(limpaLCD,0,1,"   FINALIZADO   ");
+    escreveLCD(!limpaLCD,0,1,"   FINALIZADO   ");
   });
   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
     Serial.printf("Progresso: %u%%r", (progress / (total / 100)));
@@ -621,7 +704,13 @@ void iniciarArduinoOTA () {
   Serial.println(WiFi.localIP());
 }
 
-
+void gravarLog() {
+  int n = contador;
+  // Firebase.pushInt(firebaseData,jd_x + "/Logs", n);
+  String txtN = String(n);
+  String teste = "teste";
+  Firebase.pushString(firebaseData,jd_x + "/Logs", teste + n + "texto: " + txtN);
+}
 // Recebe como parâmetro 3 valores correspondentes a hora|minuto|segundo
 // void tempo_espera(double hora, double minuto, double segundo){
 //   double h = 0, m = 0, s = 0, tempo = 0;
@@ -674,3 +763,23 @@ void iniciarArduinoOTA () {
 //  Serial.print(level); 
 //  Serial.print("\n"); 
 //  delay(5000);
+
+// void recebeDadosFirebase(int dados){
+//   int dadoRecebido = dados;
+
+//   if(Firebase.getInt(firebaseData, "/XXXXXXX/CAMINHO/XXXXXXX")){
+//     if(firebaseData.intData() == true) {
+//       Serial.println("XXXX TESTE XXXX");
+//       Serial.println(firebaseData.intData());
+//       // digitalWrite(LED,HIGH);
+//     }
+//     else if(firebaseData.boolData() == false) {
+//       Serial.println("ligth bool = ");
+//       Serial.println(firebaseData.boolData());
+//       // digitalWrite(LED,LOW);
+//     }
+//   }
+//   else {
+//     Serial.println(firebaseData.errorReason());
+//   }
+// }
